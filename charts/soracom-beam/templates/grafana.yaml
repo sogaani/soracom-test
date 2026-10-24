@@ -1,0 +1,183 @@
+{{- if .Values.grafana.enabled }}
+{{- $fullname := include "soracom-beam.fullname" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-grafana-provisioning
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+data:
+  {{- include "soracom-beam.grafanaProvisioning" . | nindent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-grafana-dashboards
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+data:
+  {{- (.Files.Glob "dashboards/*.json").AsConfig | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-grafana
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.grafana.service.type }}
+  selector:
+    {{- include "soracom-beam.selector" (list . "grafana") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.grafana.service.port }}
+      targetPort: http
+{{- if .Values.grafana.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-grafana
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: {{ .Values.grafana.persistence.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.grafana.persistence.size }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-grafana
+  labels:
+    {{- include "soracom-beam.componentLabels" (list . "grafana") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO volume
+  selector:
+    matchLabels:
+      {{- include "soracom-beam.selector" (list . "grafana") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soracom-beam.selector" (list . "grafana") | nindent 8 }}
+      annotations:
+        checksum/dashboards: {{ (.Files.Glob "dashboards/*.json").AsConfig | sha256sum }}
+        # Provisioning files are subPath mounts, which never see ConfigMap updates.
+        checksum/provisioning: {{ include "soracom-beam.grafanaProvisioning" . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}"
+          imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: {{ .Values.grafana.adminUser | quote }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soracom-beam.secretName" . }}
+                  key: grafana-admin-password
+            - name: GF_PLUGINS_PREINSTALL_SYNC
+              value: "yesoreyeram-infinity-datasource@{{ .Values.grafana.infinityPluginVersion }}"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            {{- if .Values.grafana.ingress.enabled }}
+            - name: GF_SERVER_ROOT_URL
+              value: "https://{{ .Values.grafana.ingress.host }}"
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.grafana.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+              subPath: datasources.yaml
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+              subPath: dashboards.yaml
+            - name: dashboards
+              mountPath: /etc/grafana/dashboards
+      volumes:
+        - name: data
+          {{- if .Values.grafana.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-grafana
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: provisioning
+          configMap:
+            name: {{ $fullname }}-grafana-provisioning
+        - name: dashboards
+          configMap:
+            name: {{ $fullname }}-grafana-dashboards
+      {{- with .Values.grafana.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.grafana.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.grafana.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.grafana.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-grafana
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+  {{- with .Values.grafana.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.grafana.ingress.className }}
+  rules:
+    - host: {{ required "grafana.ingress.host is required" .Values.grafana.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-grafana
+                port:
+                  name: http
+{{- end }}
+{{- end }}

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+      - run: go test -race ./...
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - run: helm lint charts/soracom-beam --set server.beam.signatureKey=ci
+      - name: Validate manifests
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar -xz kubeconform
+          helm template soracom-beam charts/soracom-beam --set server.beam.signatureKey=ci \
+            | ./kubeconform -strict -summary
+          helm template soracom-beam charts/soracom-beam --set server.beam.allowUnsigned=true \
+              --set grafana.persistence.enabled=true --set grafana.ingress.enabled=true \
+            | ./kubeconform -strict -summary

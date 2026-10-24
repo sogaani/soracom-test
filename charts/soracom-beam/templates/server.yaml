@@ -1,0 +1,132 @@
+{{- $fullname := include "soracom-beam.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-server
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "soracom-beam.selector" (list . "server") | nindent 4 }}
+  ports:
+    - name: ingest
+      port: 8080
+      targetPort: ingest
+    - name: api
+      port: 8081
+      targetPort: api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-server
+  labels:
+    {{- include "soracom-beam.componentLabels" (list . "server") | nindent 4 }}
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "soracom-beam.selector" (list . "server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soracom-beam.selector" (list . "server") | nindent 8 }}
+      annotations:
+        # The key reaches the pod as an env var: restart when it changes.
+        checksum/beam-key: {{ .Values.server.beam.signatureKey | sha256sum }}
+    spec:
+      {{- with .Values.server.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          ports:
+            - name: ingest
+              containerPort: 8080
+            - name: api
+              containerPort: 8081
+          env:
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soracom-beam.secretName" . }}
+                  key: mongodb-password
+            # Generated passwords are alphanumeric, so no URL escaping is needed.
+            - name: MONGODB_URI
+              value: "mongodb://{{ .Values.mongodb.username }}:$(MONGODB_PASSWORD)@{{ include "soracom-beam.mongodbHost" . }}:27017/{{ .Values.mongodb.database }}?authSource={{ .Values.mongodb.database }}"
+            - name: MONGODB_DATABASE
+              value: {{ .Values.mongodb.database | quote }}
+            - name: MONGODB_COLLECTION
+              value: {{ .Values.mongodb.collection | quote }}
+            - name: BEAM_SIGNATURE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soracom-beam.secretName" . }}
+                  key: beam-signature-key
+                  optional: true
+            - name: BEAM_ALLOW_UNSIGNED
+              value: {{ .Values.server.beam.allowUnsigned | quote }}
+            - name: BEAM_MAX_CLOCK_SKEW
+              value: {{ .Values.server.beam.maxClockSkew | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: ingest
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: ingest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-server
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ required "ingress.host is required" .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /beam/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-server
+                port:
+                  name: ingest
+{{- end }}

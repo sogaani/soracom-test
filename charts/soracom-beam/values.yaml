@@ -1,0 +1,113 @@
+# Secret holding all credentials. Leave empty to have the chart create one
+# (passwords are generated on first install and kept on upgrade).
+# Generation relies on Helm's `lookup`, which returns nothing under
+# `helm template`, Argo CD or Flux post-renderers: there, every render would
+# produce new passwords that no longer match the initialized MongoDB volume.
+# For GitOps installs, always set existingSecret.
+# An existing Secret must contain the keys:
+#   mongodb-root-password, mongodb-password, beam-signature-key, grafana-admin-password
+existingSecret: ""
+
+server:
+  image:
+    repository: ghcr.io/sogaani/soracom-test/server
+    # Tags pushed by .github/workflows/image.yml: main, sha-<short>, <semver>.
+    tag: main
+    pullPolicy: Always
+  imagePullSecrets: []
+  replicaCount: 1
+
+  beam:
+    # Pre-shared key registered in the SORACOM credential store (認証情報ストア)
+    # and selected for the Beam entry points' signature header (署名ヘッダ).
+    # Required unless allowUnsigned is true; the ingest endpoint is public.
+    signatureKey: ""
+    allowUnsigned: false
+    # Reject requests whose x-soracom-timestamp is older/newer than this.
+    # The signature covers only the x-soracom-* headers, not the body, so a
+    # captured set of headers can be replayed with any body within this window.
+    maxClockSkew: 2m
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Public entry for SORACOM Beam. Only the ingest port (/beam/...) is routed;
+# the query API used by Grafana stays inside the cluster.
+ingress:
+  enabled: true
+  # Cloudflare Tunnel Ingress Controller's IngressClass.
+  className: cloudflare-tunnel
+  annotations: {}
+  host: beam.example.com
+
+mongodb:
+  image:
+    repository: mongo
+    tag: "8.0.34"
+    pullPolicy: IfNotPresent
+  database: soracom
+  collection: messages
+  # The root password and the application user are only applied when the
+  # data volume is initialized (first start). Changing them later has no
+  # effect on an existing volume.
+  rootUsername: root
+  username: soracom
+  persistence:
+    storageClass: longhorn
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+grafana:
+  enabled: true
+  image:
+    repository: grafana/grafana
+    tag: "13.2.4"
+    pullPolicy: IfNotPresent
+  # Installed from the Grafana catalog on startup (needs internet egress).
+  infinityPluginVersion: "4.1.3"
+  adminUser: admin
+  service:
+    type: ClusterIP
+    port: 80
+  # Keeps users and dashboards edited in the UI. Provisioned dashboards work
+  # without it.
+  persistence:
+    enabled: false
+    storageClass: longhorn
+    size: 1Gi
+  # Not exposed by default: use `kubectl port-forward`. Enable to publish it,
+  # e.g. through the tunnel with Cloudflare Access in front.
+  ingress:
+    enabled: false
+    className: cloudflare-tunnel
+    annotations: {}
+    host: grafana.example.com
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Restricts MongoDB to the server and the query API to Grafana. Requires a
+# CNI that enforces NetworkPolicy; otherwise it has no effect.
+networkPolicy:
+  enabled: true

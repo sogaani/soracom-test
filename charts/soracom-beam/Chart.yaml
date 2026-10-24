@@ -1,0 +1,6 @@
+apiVersion: v2
+name: soracom-beam
+description: Receives SORACOM Beam data, stores it in MongoDB and visualizes it with Grafana.
+type: application
+version: 0.1.0
+appVersion: "main"

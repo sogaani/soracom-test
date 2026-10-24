@@ -1,0 +1,140 @@
+{{- $fullname := include "soracom-beam.fullname" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-mongodb-init
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+data:
+  # Runs once, when the data volume is empty.
+  create-app-user.js: |
+    const dbName = process.env.MONGO_APP_DATABASE;
+    db.getSiblingDB(dbName).createUser({
+      user: process.env.MONGO_APP_USERNAME,
+      pwd: process.env.MONGO_APP_PASSWORD,
+      roles: [{ role: "readWrite", db: dbName }],
+    });
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mongodb
+  labels:
+    {{- include "soracom-beam.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "soracom-beam.selector" (list . "mongodb") | nindent 4 }}
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-mongodb
+  labels:
+    {{- include "soracom-beam.componentLabels" (list . "mongodb") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-mongodb
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "soracom-beam.selector" (list . "mongodb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soracom-beam.selector" (list . "mongodb") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mongodb
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy }}
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: {{ .Values.mongodb.rootUsername | quote }}
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soracom-beam.secretName" . }}
+                  key: mongodb-root-password
+            - name: MONGO_APP_DATABASE
+              value: {{ .Values.mongodb.database | quote }}
+            - name: MONGO_APP_USERNAME
+              value: {{ .Values.mongodb.username | quote }}
+            - name: MONGO_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "soracom-beam.secretName" . }}
+                  key: mongodb-password
+          startupProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            periodSeconds: 5
+            # mongosh (Node.js) can take >1s to start on small arm64 nodes.
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.mongodb.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: init
+          configMap:
+            name: {{ $fullname }}-mongodb-init
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.mongodb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mongodb.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mongodb.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.mongodb.persistence.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.mongodb.persistence.size }}
