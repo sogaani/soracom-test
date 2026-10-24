@@ -82,8 +82,16 @@ grafana:
   infinityPluginVersion: "4.1.3"
   adminUser: admin
   service:
+    # ClusterIP (use `kubectl port-forward`) or LoadBalancer.
     type: ClusterIP
     port: 80
+    # LoadBalancer only. Fixed address from the load balancer's pool.
+    # spec.loadBalancerIP is deprecated upstream; MetalLB also accepts the
+    # annotation metallb.io/loadBalancerIPs, set via `annotations` below.
+    loadBalancerIP: ""
+    # LoadBalancer only, e.g. ["192.168.0.0/24"]. Restricts client source IPs.
+    loadBalancerSourceRanges: []
+    annotations: {}
   # Keeps users and dashboards edited in the UI. Provisioned dashboards work
   # without it.
   persistence:

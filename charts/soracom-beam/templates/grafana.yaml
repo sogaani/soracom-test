@@ -24,8 +24,21 @@ metadata:
   name: {{ $fullname }}-grafana
   labels:
     {{- include "soracom-beam.labels" . | nindent 4 }}
+  {{- with .Values.grafana.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.grafana.service.type }}
+  {{- if eq .Values.grafana.service.type "LoadBalancer" }}
+  {{- with .Values.grafana.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.grafana.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
   selector:
     {{- include "soracom-beam.selector" (list . "grafana") | nindent 4 }}
   ports:

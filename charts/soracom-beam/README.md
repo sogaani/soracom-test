@@ -40,7 +40,6 @@ device ──> Unified Endpoint ──> SORACOM Beam ──HTTPS──> Cloudfla
    helm upgrade --install soracom-beam charts/soracom-beam \
      --namespace soracom --create-namespace \
      --set ingress.host=beam.example.com \
-     --set server.image.repository=ghcr.io/<owner>/<repo>/server \
      --set server.beam.signatureKey='<pre-shared key>'
    ```
 
@@ -61,6 +60,14 @@ device ──> Unified Endpoint ──> SORACOM Beam ──HTTPS──> Cloudfla
    kubectl -n soracom get secret soracom-beam -o jsonpath='{.data.grafana-admin-password}' | base64 -d; echo
    kubectl -n soracom port-forward svc/soracom-beam-grafana 3000:80
    # http://localhost:3000  → Dashboards → SORACOM → SORACOM Beam (user: admin)
+   ```
+
+   Or give it a fixed LAN address (needs a LoadBalancer implementation such as
+   MetalLB):
+
+   ```sh
+   --set grafana.service.type=LoadBalancer \
+   --set grafana.service.loadBalancerIP=192.168.1.50
    ```
 
 ## SORACOM settings (SIM group)
@@ -117,4 +124,7 @@ See [values.yaml](values.yaml). Common ones:
 | `server.image.tag` | `main` | Pin to `sha-<short>` for reproducible deploys |
 | `mongodb.persistence.size` | `10Gi` | |
 | `grafana.persistence.enabled` | `false` | Keep UI-made changes on a Longhorn PVC |
+| `grafana.service.type` | `ClusterIP` | `LoadBalancer` to expose Grafana on the LAN |
+| `grafana.service.loadBalancerIP` | `""` | Fixed address for `LoadBalancer` |
+| `grafana.service.loadBalancerSourceRanges` | `[]` | Allowed client CIDRs for `LoadBalancer` |
 | `grafana.ingress.enabled` | `false` | Put Cloudflare Access in front if you enable it |
